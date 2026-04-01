@@ -122,14 +122,17 @@ class EvaluatorService:
         pairs = list(combinations(candidates, 2))
         for left, right in pairs[:6]:
             prompt = self._prompts.pairwise(goal=goal, subtask=subtask, left=left, right=right)
-            response = await self._gateway.generate_structured(
-                model=self._settings.evaluator_models[0],
-                system_instruction=prompt.system_instruction,
-                user_prompt=prompt.user_prompt,
-                schema=PairwiseDecision,
-                phase=ExecutionPhase.EVALUATION,
-                temperature=0.0,
-            )
+            try:
+                response = await self._gateway.generate_structured(
+                    model=self._settings.evaluator_models[0],
+                    system_instruction=prompt.system_instruction,
+                    user_prompt=prompt.user_prompt,
+                    schema=PairwiseDecision,
+                    phase=ExecutionPhase.EVALUATION,
+                    temperature=0.0,
+                )
+            except SchemaValidationError:
+                continue
             winner = response.parsed.winner_candidate_id
             if winner in scores:
                 scores[winner] += 0.3

@@ -166,17 +166,26 @@ class GeminiGateway:
             parsed = self._parse_structured_response(adapter, response)
         except SchemaValidationError as exc:
             finish_reason = self._primary_finish_reason(response)
-            if self._is_truncated_response(response):
+            if self._should_attempt_json_repair(exc, response):
+                repair_status = (
+                    "repair_attempt_truncated"
+                    if self._is_truncated_response(response)
+                    else "repair_attempt_malformed_json"
+                )
                 self._logger.log(
                     level="WARNING",
                     phase=phase.value,
                     model=model,
                     event_type="structured_output_parse",
-                    status="repair_attempt",
+                    status=repair_status,
                     finish_reason=finish_reason,
                     error=str(exc),
                 )
-                repair_prompt = self._repair_prompt(user_prompt=prompt, schema_adapter=adapter, broken_json=response.text or "")
+                repair_prompt = self._repair_prompt(
+                    user_prompt=prompt,
+                    schema_adapter=adapter,
+                    broken_json=response.text or "",
+                )
                 repair_config = self._structured_config(
                     system_instruction=system_instruction,
                     schema=None,
@@ -507,6 +516,18 @@ class GeminiGateway:
         finish_reason = self._primary_finish_reason(response)
         return finish_reason is not None and "MAX_TOKENS" in finish_reason
 
+    def _should_attempt_json_repair(self, exc: SchemaValidationError, response: Any) -> bool:
+        text = (response.text or "").strip()
+        if not text:
+            return False
+        if self._is_truncated_response(response):
+            return True
+        return self._is_invalid_json_error(exc)
+
+    def _is_invalid_json_error(self, exc: Exception) -> bool:
+        message = str(exc)
+        return "Invalid JSON" in message or "json_invalid" in message
+
     def _repair_prompt(
         self,
         *,
@@ -519,11 +540,11 @@ class GeminiGateway:
         except Exception:  # noqa: BLE001
             schema_payload = {"type": "object"}
         return (
-            "Repair and complete the following truncated JSON so it becomes valid JSON matching the schema exactly. "
+            "Repair and complete the following malformed or truncated JSON so it becomes valid JSON matching the schema exactly. "
             "Output only valid JSON.\n\n"
             f"Original task prompt:\n{user_prompt}\n\n"
             "Required JSON schema:\n"
             f"{json.dumps(schema_payload, indent=2, ensure_ascii=True)}\n\n"
-            "Truncated JSON to repair:\n"
+            "Broken JSON to repair:\n"
             f"{broken_json}"
         )

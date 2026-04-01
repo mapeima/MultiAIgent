@@ -58,3 +58,55 @@ def test_gateway_falls_back_when_schema_uses_additional_properties(tmp_path):
     assert captured["response_schema"] is None
     assert "The JSON must satisfy this schema" in captured["contents"]
     assert result.parsed.mapping == {"a": 1.5}
+
+
+def test_gateway_repairs_malformed_json(tmp_path):
+    settings = Settings(
+        gemini_api_key="test-key",
+        artifact_dir=tmp_path / "runs",
+        router_state_dir=tmp_path / "state",
+    )
+    store = ArtifactStore(settings, "gateway-repair", FileSystemAdapter())
+    gateway = GeminiGateway(
+        settings,
+        PriceBook(settings),
+        EventLogger(store.log_path(), "gateway-repair"),
+        MetricsTracker(),
+    )
+    calls = []
+
+    async def fake_call_with_retry(*, contents, config, **kwargs):
+        calls.append(contents)
+        if len(calls) == 1:
+            return (
+                SimpleNamespace(
+                    text='{\n  "name": "ok",\n  "mapping": {"a": 1.5}\n"\n}',
+                    parsed=None,
+                    usage_metadata=None,
+                    candidates=[SimpleNamespace(finish_reason="STOP")],
+                ),
+                3,
+            )
+        return (
+            SimpleNamespace(
+                text='{"name":"ok","mapping":{"a":1.5}}',
+                parsed=None,
+                usage_metadata=None,
+                candidates=[SimpleNamespace(finish_reason="STOP")],
+            ),
+            4,
+        )
+
+    gateway._call_with_retry = fake_call_with_retry  # type: ignore[method-assign]
+    result = __import__("asyncio").run(
+        gateway.generate_structured(
+            model="gemini-2.5-flash",
+            system_instruction="Return JSON.",
+            user_prompt="Give me the payload.",
+            schema=DictSchemaModel,
+            phase=ExecutionPhase.PLANNING,
+        )
+    )
+    assert len(calls) == 2
+    assert "Broken JSON to repair" in calls[1]
+    assert result.parsed.mapping == {"a": 1.5}
