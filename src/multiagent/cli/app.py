@@ -53,7 +53,7 @@ def _print_markdown(value: str) -> None:
 def run(
     goal: str,
     mode: RunMode = typer.Option(None),
-    repo: Path | None = typer.Option(None, exists=True, file_okay=False),
+    repo: Path | None = typer.Option(None, file_okay=False),
     constraint: list[str] = typer.Option(None),
     no_apply: bool = typer.Option(False, "--no-apply"),
     models: str | None = typer.Option(None, "--models"),
@@ -83,7 +83,7 @@ def run(
 def plan(
     goal: str,
     mode: RunMode = typer.Option(None),
-    repo: Path | None = typer.Option(None, exists=True, file_okay=False),
+    repo: Path | None = typer.Option(None, file_okay=False),
     constraint: list[str] = typer.Option(None),
 ) -> None:
     settings = load_settings()
@@ -104,7 +104,7 @@ def plan(
 def benchmark_command(
     goal: str,
     models: str = typer.Option(..., "--models"),
-    repo: Path | None = typer.Option(None, exists=True, file_okay=False),
+    repo: Path | None = typer.Option(None, file_okay=False),
     temperatures: str | None = typer.Option(None, "--temperatures"),
 ) -> None:
     settings = load_settings()
@@ -126,7 +126,7 @@ def benchmark_prompts(
     goal: str,
     variants: str = typer.Option(..., "--variants"),
     model: str | None = typer.Option(None, "--model"),
-    repo: Path | None = typer.Option(None, exists=True, file_okay=False),
+    repo: Path | None = typer.Option(None, file_okay=False),
 ) -> None:
     settings = load_settings()
     orchestrator = Orchestrator(settings)
@@ -161,6 +161,26 @@ def replay(run_id: str) -> None:
     orchestrator = Orchestrator(settings)
     new_run_id, report = asyncio.run(orchestrator.replay(run_id))
     console.print(f"Replay run: [bold]{new_run_id}[/bold]")
+    console.print(f"Status: {report.status}")
+    console.print(f"Artifacts: {report.artifact_root}")
+
+
+@app.command()
+def resume(
+    run_id: str,
+    repo: Path | None = typer.Option(None, file_okay=False),
+    no_apply: bool = typer.Option(False, "--no-apply"),
+) -> None:
+    settings = load_settings()
+    orchestrator = Orchestrator(settings)
+    new_run_id, report = asyncio.run(
+        orchestrator.resume(
+            run_id,
+            repo_path=str(repo) if repo else None,
+            apply_repo_changes=False if no_apply else None,
+        )
+    )
+    console.print(f"Resume run: [bold]{new_run_id}[/bold]")
     console.print(f"Status: {report.status}")
     console.print(f"Artifacts: {report.artifact_root}")
 

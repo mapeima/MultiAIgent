@@ -18,7 +18,7 @@ from multiagent.domain.models import (
 from multiagent.services.artifact_store import ArtifactStore
 from multiagent.services.orchestrator import Orchestrator
 
-from tests.conftest import DummyBudget, DummyReviewer, DummySynthesizer, make_plan
+from tests.conftest import DummyBudget, DummyReviewer, DummySynthesizer, make_plan, make_subtask
 
 
 class StubPlanner:
@@ -43,14 +43,24 @@ class StubPlanner:
             ]
         )
 
+    def task_graph(self, plan):
+        from multiagent.services.planner import PlannerService
+
+        return PlannerService.task_graph(self, plan)
+
 
 class StubScheduler:
     def __init__(self):
         self.calls = 0
+        self.existing_lengths: list[int] = []
 
     async def execute(self, *, plan, existing_selections=None, **kwargs):
         self.calls += 1
-        subtask = plan.subtasks[0]
+        existing_selections = existing_selections or []
+        self.existing_lengths.append(len(existing_selections))
+        in_plan_existing = [item for item in existing_selections if item.subtask_id in {node.id for node in plan.subtasks}]
+        completed_ids = {item.subtask_id for item in in_plan_existing}
+        subtask = next(item for item in plan.subtasks if item.id not in completed_ids)
         selection = SubtaskSelection(
             subtask_id=subtask.id,
             selected_candidate_id=f"{subtask.id}-cand-1",
@@ -71,7 +81,7 @@ class StubScheduler:
             evaluations=[],
             merged_candidate_ids=[],
         )
-        return [selection]
+        return [*in_plan_existing, selection]
 
 
 class StubBatch:
@@ -116,3 +126,53 @@ def test_orchestrator_runs_corrective_loop(base_settings):
     assert report.review_verdict.passed is True
     assert len(report.selected_results) == 2
     assert orchestrator.scheduler.calls == 2
+
+
+def test_orchestrator_resume_reuses_prior_selections(base_settings):
+    source_run_id = "resume-source"
+    source_store = ArtifactStore(base_settings, source_run_id, FileSystemAdapter())
+    request = RunRequest(goal="goal", mode=RunMode.AGGRESSIVE, apply_repo_changes=False)
+    source_store.write_json("request.json", request.model_dump(mode="json"))
+    source_store.write_json(
+        "plan.json",
+        make_plan(
+            [
+                make_subtask("base"),
+                make_subtask("followup", depends_on=["base"]),
+            ]
+        ).model_dump(mode="json"),
+    )
+    source_store.write_json(
+        "summaries/base.json",
+        SubtaskSelection(
+            subtask_id="base",
+            selected_candidate_id="base-cand-1",
+            selected_result=WorkerResult(
+                summary="done",
+                detailed_result="detail",
+                artifacts=[],
+                suggested_files=[],
+                code_changes=[],
+                risks=[],
+                confidence=0.8,
+                model_used="gemini-2.5-flash",
+                prompt_variant="default",
+                token_usage_estimate=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+                follow_up_suggestions=[],
+            ),
+            candidate_results=[],
+            evaluations=[],
+            merged_candidate_ids=[],
+        ).model_dump(mode="json"),
+    )
+
+    orchestrator = HarnessOrchestrator(base_settings)
+    orchestrator.reviewer.calls = 1
+    new_run_id, report = asyncio.run(orchestrator.resume(source_run_id))
+
+    assert new_run_id
+    assert report.source_run_id == source_run_id
+    assert len(report.selected_results) == 2
+    assert orchestrator.scheduler.existing_lengths[0] == 1
+    resume_manifest = base_settings.artifact_dir / new_run_id / "resume_manifest.json"
+    assert resume_manifest.exists()

@@ -65,8 +65,10 @@ class Scheduler:
         existing_selections = existing_selections or []
         self._validate_dag(plan)
         subtask_lookup = {subtask.id: subtask for subtask in plan.subtasks}
+        completed_ids = {item.subtask_id for item in existing_selections if item.subtask_id in subtask_lookup}
+        existing_selections = [item for item in existing_selections if item.subtask_id in completed_ids]
         remaining_dependencies = {
-            subtask.id: len(subtask.depends_on)
+            subtask.id: len([dependency for dependency in subtask.depends_on if dependency not in completed_ids])
             for subtask in plan.subtasks
         }
         dependents: dict[str, list[str]] = defaultdict(list)
@@ -75,7 +77,7 @@ class Scheduler:
                 dependents[dependency].append(subtask.id)
         ready: list[tuple[int, int, str]] = []
         for subtask in plan.subtasks:
-            if remaining_dependencies[subtask.id] == 0:
+            if subtask.id not in completed_ids and remaining_dependencies[subtask.id] == 0:
                 heapq.heappush(ready, (-subtask.importance_score, -subtask.complexity_score, subtask.id))
         global_sem = asyncio.Semaphore(tuning.max_concurrency)
         role_caps: dict[str, asyncio.Semaphore] = {}
@@ -202,13 +204,18 @@ class Scheduler:
                 result=selected.result,
             )
             if not mutation.applied:
+                mutation_message = (
+                    f"Repo mutation was reverted: {mutation.message}"
+                    if mutation.reverted
+                    else f"Repo mutation was not applied: {mutation.message}"
+                )
                 selected = selected.model_copy(
                     update={
                         "result": selected.result.model_copy(
                             update={
                                 "risks": [
                                     *selected.result.risks,
-                                    f"Repo mutation was reverted: {mutation.message}",
+                                    mutation_message,
                                 ]
                             }
                         )

@@ -42,6 +42,7 @@ uv run multiagent benchmark "Implement feature flags in Python" --models gemini-
 uv run multiagent benchmark-prompts "Write a production FastAPI service" --variants default,strict,architect
 uv run multiagent inspect <run_id>
 uv run multiagent replay <run_id>
+uv run multiagent resume <run_id>
 uv run multiagent budget recommend
 uv run multiagent batch submit "Generate 20 architectural variants for X" --count 20
 uv run multiagent batch reconcile <batch_id>
